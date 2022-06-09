@@ -209,9 +209,7 @@ std::vector<size_t> MergeTreeReadPool::fillPerPartInfo(const RangesInDataParts &
 
         per_part_sum_marks.push_back(sum_marks);
 
-        auto task_columns = getReadTaskColumns(
-            data, storage_snapshot, part.data_part,
-            column_names, prewhere_info, /*with_subcolumns=*/ true);
+        auto task_columns = getReadTaskColumns(data, storage_snapshot, part.data_part, column_names, prewhere_info);
 
         auto size_predictor = !predict_block_size_bytes ? nullptr
             : MergeTreeBaseSelectProcessor::getSizePredictor(part.data_part, task_columns, sample_block);

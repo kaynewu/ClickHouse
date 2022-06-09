@@ -81,12 +81,11 @@ void CertificateReloader::tryLoad(const Poco::Util::AbstractConfiguration & conf
     {
         bool cert_file_changed = cert_file.changeIfModified(std::move(new_cert_path), log);
         bool key_file_changed = key_file.changeIfModified(std::move(new_key_path), log);
-        std::string pass_phrase = config.getString("openSSL.server.privateKeyPassphraseHandler.options.password", "");
 
         if (cert_file_changed || key_file_changed)
         {
             LOG_DEBUG(log, "Reloading certificate ({}) and key ({}).", cert_file.path, key_file.path);
-            data.set(std::make_unique<const Data>(cert_file.path, key_file.path, pass_phrase));
+            data.set(std::make_unique<const Data>(cert_file.path, key_file.path));
             LOG_INFO(log, "Reloaded certificate ({}) and key ({}).", cert_file.path, key_file.path);
         }
 
@@ -105,8 +104,8 @@ void CertificateReloader::tryLoad(const Poco::Util::AbstractConfiguration & conf
 }
 
 
-CertificateReloader::Data::Data(std::string cert_path, std::string key_path, std::string pass_phrase)
-    : cert(cert_path), key(/* public key */ "", /* private key */ key_path, pass_phrase)
+CertificateReloader::Data::Data(std::string cert_path, std::string key_path)
+    : cert(cert_path), key(/* public key */ "", /* private key */ key_path)
 {
 }
 

@@ -103,9 +103,8 @@ class QuantileTDigest
       */
     static Value interpolate(Value x, Value x1, Value y1, Value x2, Value y2)
     {
-        /// Symmetric interpolation for better results with infinities.
         double k = (x - x1) / (x2 - x1);
-        return (1 - k) * y1 + k * y2;
+        return y1 + k * (y2 - y1);
     }
 
     struct RadixSortTraits
@@ -138,11 +137,6 @@ class QuantileTDigest
             compress();
     }
 
-    inline bool canBeMerged(const BetterFloat & l_mean, const Value & r_mean)
-    {
-        return l_mean == r_mean || (!std::isinf(l_mean) && !std::isinf(r_mean));
-    }
-
     void compressBrute()
     {
         if (centroids.size() <= params.max_centroids)
@@ -155,17 +149,13 @@ class QuantileTDigest
         BetterFloat l_mean = l->mean; // We have high-precision temporaries for numeric stability
         BetterFloat l_count = l->count;
         size_t batch_pos = 0;
-
-        for (; r != centroids.end(); ++r)
+        for (;r != centroids.end(); ++r)
         {
             if (batch_pos < batch_size - 1)
             {
                 /// The left column "eats" the right. Middle of the batch
                 l_count += r->count;
-                if (r->mean != l_mean) /// Handling infinities of the same sign well.
-                {
-                    l_mean += r->count * (r->mean - l_mean) / l_count; // Symmetric algo (M1*C1 + M2*C2)/(C1+C2) is numerically better, but slower
-                }
+                l_mean += r->count * (r->mean - l_mean) / l_count; // Symmetric algo (M1*C1 + M2*C2)/(C1+C2) is numerically better, but slower
                 l->mean = l_mean;
                 l->count = l_count;
                 batch_pos += 1;
@@ -173,11 +163,8 @@ class QuantileTDigest
             else
             {
                 // End of the batch, start the next one
-                if (!std::isnan(l->mean)) /// Skip writing batch result if we compressed something to nan.
-                {
-                    sum += l->count; // Not l_count, otherwise actual sum of elements will be different
-                    ++l;
-                }
+                sum += l->count; // Not l_count, otherwise actual sum of elements will be different
+                ++l;
 
                 /// We skip all the values "eaten" earlier.
                 *l = *r;
@@ -186,17 +173,8 @@ class QuantileTDigest
                 batch_pos = 0;
             }
         }
-
-        if (!std::isnan(l->mean))
-        {
-            count = sum + l_count; // Update count, it might be different due to += inaccuracy
-            centroids.resize(l - centroids.begin() + 1);
-        }
-        else /// Skip writing last batch if (super unlikely) it's nan.
-        {
-            count = sum;
-            centroids.resize(l - centroids.begin());
-        }
+        count = sum + l_count; // Update count, it might be different due to += inaccuracy
+        centroids.resize(l - centroids.begin() + 1);
         // Here centroids.size() <= params.max_centroids
     }
 
@@ -222,8 +200,11 @@ public:
             BetterFloat l_count = l->count;
             while (r != centroids.end())
             {
-                /// N.B. We cannot merge all the same values into single centroids because this will lead to
-                /// unbalanced compression and wrong results.
+                /// N.B. Piece of logic which compresses the same singleton centroids into one centroid is removed
+                /// because: 1) singleton centroids are being processed in unusual way in recent version of algorithm
+                /// and such compression would break this logic;
+                /// 2) we shall not compress centroids further than `max_centroids` parameter requires because
+                /// this will lead to uneven compression.
                 /// For more information see: https://arxiv.org/abs/1902.04023
 
                 /// The ratio of the part of the histogram to l, including the half l to the entire histogram. That is, what level quantile in position l.
@@ -244,15 +225,12 @@ public:
                   *  and at the edges decreases and is approximately equal to the distance to the edge * 4.
                   */
 
-                if (l_count + r->count <= k && canBeMerged(l_mean, r->mean))
+                if (l_count + r->count <= k)
                 {
                     // it is possible to merge left and right
                     /// The left column "eats" the right.
                     l_count += r->count;
-                    if (r->mean != l_mean) /// Handling infinities of the same sign well.
-                    {
-                        l_mean += r->count * (r->mean - l_mean) / l_count; // Symmetric algo (M1*C1 + M2*C2)/(C1+C2) is numerically better, but slower
-                    }
+                    l_mean += r->count * (r->mean - l_mean) / l_count; // Symmetric algo (M1*C1 + M2*C2)/(C1+C2) is numerically better, but slower
                     l->mean = l_mean;
                     l->count = l_count;
                 }
@@ -276,7 +254,6 @@ public:
             centroids.resize(l - centroids.begin() + 1);
             unmerged = 0;
         }
-
         // Ensures centroids.size() < max_centroids, independent of unprovable floating point blackbox above
         compressBrute();
     }
@@ -321,17 +298,10 @@ public:
 
         for (const auto & c : centroids)
         {
-            if (c.count <= 0 || std::isnan(c.count)) // invalid count breaks compress()
+            if (c.count <= 0 || std::isnan(c.count) || std::isnan(c.mean)) // invalid count breaks compress(), invalid mean breaks sort()
                 throw Exception("Invalid centroid " + std::to_string(c.count) + ":" + std::to_string(c.mean), ErrorCodes::CANNOT_PARSE_INPUT_ASSERTION_FAILED);
-            if (!std::isnan(c.mean))
-            {
-                count += c.count;
-            }
+            count += c.count;
         }
-
-        auto it = std::remove_if(centroids.begin(), centroids.end(), [](Centroid & c) { return std::isnan(c.mean); });
-        centroids.erase(it, centroids.end());
-
         compress(); // Allows reading/writing TDigests with different epsilon/max_centroids params
     }
 
@@ -342,7 +312,7 @@ public:
     ResultType getImpl(Float64 level)
     {
         if (centroids.empty())
-            return std::is_floating_point_v<ResultType> ? std::numeric_limits<ResultType>::quiet_NaN() : 0;
+            return std::is_floating_point_v<ResultType> ? NAN : 0;
 
         compress();
 
@@ -425,6 +395,7 @@ public:
 
                 while (current_x >= x)
                 {
+
                     if (x <= left)
                         result[levels_permutation[result_num]] = prev_mean;
                     else if (x >= right)

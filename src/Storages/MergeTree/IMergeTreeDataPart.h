@@ -164,8 +164,7 @@ public:
 
     /// Returns the name of a column with minimum compressed size (as returned by getColumnSize()).
     /// If no checksums are present returns the name of the first physically existing column.
-    String getColumnNameWithMinimumCompressedSize(
-        const StorageSnapshotPtr & storage_snapshot, bool with_subcolumns) const;
+    String getColumnNameWithMinimumCompressedSize(const StorageSnapshotPtr & storage_snapshot) const;
 
     bool contains(const IMergeTreeDataPart & other) const { return info.contains(other.info); }
 
